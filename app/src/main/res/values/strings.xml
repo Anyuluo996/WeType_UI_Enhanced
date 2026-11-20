@@ -76,6 +76,13 @@
     <string name="settings_icon_shape_reset">Reset icon</string>
     <string name="settings_icon_shape_import_empty">No path element found in the selected file</string>
     <string name="settings_icon_shape_imported">Imported %1$d path(s)</string>
+    <string name="settings_background_image_title">Custom background image</string>
+    <string name="settings_background_image_desc">Pick a picture for the keyboard background of this mode. The existing background color works as its overlay; lower its opacity to reveal the image.</string>
+    <string name="settings_background_image_pick">Choose image…</string>
+    <string name="settings_background_image_clear">Clear background image</string>
+    <string name="settings_background_image_picked">Background image set</string>
+    <string name="settings_background_image_copy_failed">Could not read the selected image</string>
+    <string name="settings_background_brightness_title">Background brightness</string>
     <string name="settings_light_key_color_title">Light mode key color</string>
     <string name="settings_dark_key_color_title">Dark mode key color</string>
     <string name="settings_key_color_group_summary">Use the slider below to adjust opacity · %1$d / 255 opacity · %2$d mapped entries</string>

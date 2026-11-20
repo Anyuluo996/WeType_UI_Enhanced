@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
@@ -72,6 +73,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.geometry.Offset
@@ -99,6 +101,7 @@ import androidx.core.view.WindowCompat
 import com.kyant.capsule.ContinuousRoundedRectangle
 import com.xposed.wetypehook.ui.TabRowWithContour
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
+import com.xposed.wetypehook.wetype.hook.WeTypeBackgroundImage
 import com.xposed.wetypehook.wetype.graphics.SfSymbols
 import com.xposed.wetypehook.wetype.graphics.SvgPathImporter
 import com.xposed.wetypehook.wetype.graphics.WeTypeBloomStrokeDrawable
@@ -143,6 +146,7 @@ import top.yukonga.miuix.kmp.theme.darkColorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 import kotlinx.coroutines.delay
+import java.io.File
 import kotlin.math.roundToInt
 
 const val EXTRA_OPEN_WETYPE_EMBEDDED_SETTINGS = "com.xposed.wetypehook.extra.OPEN_WETYPE_EMBEDDED_SETTINGS"
@@ -453,6 +457,8 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
     var toolbarIconBgOpacity by mutableIntStateOf(snapshot.toolbarIconBgOpacity)
     var customIconPath by mutableStateOf(snapshot.customIconPath)
     var iconScale by mutableFloatStateOf(snapshot.iconScale)
+    var backgroundImagePath by mutableStateOf(snapshot.backgroundImagePath)
+    var backgroundBrightness by mutableIntStateOf(snapshot.backgroundBrightness)
     var previewGlassOverrides by mutableStateOf(snapshot.glassOverrides)
     val glassInput = mutableStateListOf(
         *GlassOverrideField.entries.map { snapshot.glassOverrides.text(it) }.toTypedArray()
@@ -511,7 +517,9 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
         iconScale = iconScale,
         hyperMaterialEnabled = hyperMaterialEnabled,
         glassOverrides = requireNotNull(parsedGlassOverrides()),
-        followingColors = followingColors
+        followingColors = followingColors,
+        backgroundImagePath = backgroundImagePath,
+        backgroundBrightness = backgroundBrightness
     )
 
     companion object {
@@ -533,6 +541,8 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
                     put("toolbarIconBgOpacity", draft.toolbarIconBgOpacity)
                     put("customIconPath", draft.customIconPath)
                     put("iconScale", draft.iconScale)
+                    put("backgroundImagePath", draft.backgroundImagePath)
+                    put("backgroundBrightness", draft.backgroundBrightness)
                     GlassOverrideField.entries.forEach { field ->
                         put("glass:${field.name}", draft.glassInput[field.ordinal])
                         put("previewGlass:${field.name}", draft.previewGlassOverrides.text(field))
@@ -559,6 +569,8 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
                     toolbarIconBgOpacity = values["toolbarIconBgOpacity"] as Int
                     customIconPath = values["customIconPath"] as String
                     iconScale = values["iconScale"] as Float
+                    backgroundImagePath = values["backgroundImagePath"] as? String ?: ""
+                    backgroundBrightness = values["backgroundBrightness"] as? Int ?: 50
                     GlassOverrideField.entries.forEach { field ->
                         glassInput[field.ordinal] = values["glass:${field.name}"] as? String ?: ""
                     }
@@ -782,7 +794,9 @@ private fun WeTypeSettingsScreen(
                     edgeHighlightIntensity = draft.edgeHighlightIntensity,
                     lightKeyColor = keyColorValue(false),
                     darkKeyColor = keyColorValue(true),
-                    isDark = currentModeIsDark
+                    isDark = currentModeIsDark,
+                    backgroundImagePath = draft.backgroundImagePath,
+                    backgroundBrightness = draft.backgroundBrightness
                 )
             }
         }
@@ -937,6 +951,22 @@ private fun WeTypeSettingsScreen(
                             max = WeTypeSettings.MAX_KEY_CORNER_RADIUS,
                             onValueChange = { draft.keyCornerRadius = it }
                         )
+
+                        BackgroundImagePreferenceItem(
+                            modeFilePrefix = if (currentModeIsDark) "wetypefix_bg_dark" else "wetypefix_bg_light",
+                            value = draft.backgroundImagePath,
+                            onValueChange = { draft.backgroundImagePath = it }
+                        )
+
+                        SliderPreferenceItem(
+                            title = stringResource(R.string.settings_background_brightness_title),
+                            value = draft.backgroundBrightness,
+                            max = WeTypeSettings.MAX_BACKGROUND_BRIGHTNESS,
+                            enabled = draft.backgroundImagePath.isNotBlank(),
+                            onValueChange = { draft.backgroundBrightness = it }
+                        )
+
+                        HorizontalDivider()
 
                         SliderPreferenceItem(
                             title = stringResource(R.string.settings_toolbar_icon_bg_opacity_title),
@@ -1122,7 +1152,9 @@ private fun PreviewSection(
     edgeHighlightIntensity: Int,
     lightKeyColor: Int,
     darkKeyColor: Int,
-    isDark: Boolean
+    isDark: Boolean,
+    backgroundImagePath: String,
+    backgroundBrightness: Int
 ) {
     Column(
         modifier = Modifier.padding(bottom = 16.dp)
@@ -1155,7 +1187,9 @@ private fun PreviewSection(
                         edgeHighlightIntensity = edgeHighlightIntensity,
                         lightKeyColor = lightKeyColor,
                         darkKeyColor = darkKeyColor,
-                        isDark = isDark
+                        isDark = isDark,
+                        backgroundImagePath = backgroundImagePath,
+                        backgroundBrightness = backgroundBrightness
                     )
                 }
             }
@@ -1175,7 +1209,9 @@ private fun PreviewCard(
     edgeHighlightIntensity: Int,
     lightKeyColor: Int,
     darkKeyColor: Int,
-    isDark: Boolean
+    isDark: Boolean,
+    backgroundImagePath: String,
+    backgroundBrightness: Int
 ) {
     val context = LocalContext.current
     val displayColor = if (hyperMaterialEnabled && glassOverrides.glass == null) WeTypeHyperMaterial.fallbackColor(isDark) else color
@@ -1228,7 +1264,30 @@ private fun PreviewCard(
                     )
                     .clip(previewShape)
             ) {
-                if (hyperMaterialEnabled) {
+                val previewBitmap = remember(backgroundImagePath) {
+                    WeTypeBackgroundImage.decode(backgroundImagePath)
+                }
+                if (previewBitmap != null) {
+                    // Mirror the hook-side layer order: image → brightness scrim → tint.
+                    Image(
+                        bitmap = previewBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize()
+                    )
+                    if (backgroundBrightness != 50) {
+                        Box(
+                            modifier = Modifier
+                                .matchParentSize()
+                                .background(backgroundBrightnessScrim(backgroundBrightness))
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(ComposeColor(color))
+                    )
+                } else if (hyperMaterialEnabled) {
                     HyperMaterialPreview(
                         overrides = glassOverrides,
                         tintColor = color,
@@ -1320,6 +1379,20 @@ private fun PreviewCard(
             }
         }
     }
+}
+
+
+/** Mirrors the hook-side scrim in [WeTypeBackgroundImageDrawable]: below 50 darkens, above brightens. */
+private fun backgroundBrightnessScrim(brightness: Int): ComposeColor = when {
+    brightness < 50 -> {
+        val strength = (50 - brightness) / 50f
+        ComposeColor.Black.copy(alpha = strength * 0.7f)
+    }
+    brightness > 50 -> {
+        val strength = (brightness - 50) / 50f
+        ComposeColor.White.copy(alpha = strength * 0.5f)
+    }
+    else -> ComposeColor.Transparent
 }
 
 
@@ -1756,6 +1829,138 @@ private fun IconShapePreferenceItem(
             ),
             onClick = onReset
         )
+    }
+}
+
+/**
+ * Picks a picture for the per-mode keyboard background image. The bytes are copied into the
+ * host app's filesDir (prefs store an absolute path the hook process reads back), keeping the
+ * SAF grant out of the equation.
+ */
+@Composable
+private fun BackgroundImagePreferenceItem(
+    modeFilePrefix: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val registryOwner = LocalActivityResultRegistryOwner.current
+    val hostActivity = remember(context) { context.findHostActivity() }
+
+    fun applyPickedImage(uri: Uri?) {
+        if (uri == null) return
+        val copied = runCatching {
+            val mime = context.contentResolver.getType(uri) ?: "image/*"
+            val extension = when {
+                mime.contains("png", ignoreCase = true) -> ".png"
+                mime.contains("webp", ignoreCase = true) -> ".webp"
+                mime.contains("gif", ignoreCase = true) -> ".gif"
+                else -> ".jpg"
+            }
+            val directory = File(context.applicationContext.filesDir, "backgrounds")
+            directory.mkdirs()
+            directory.listFiles()
+                ?.filter { it.name.startsWith(modeFilePrefix) }
+                ?.forEach { it.delete() }
+            val target = File(directory, "$modeFilePrefix$extension")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: error("Cannot open the picked image")
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(target.absolutePath, bounds)
+            check(bounds.outWidth > 0 && bounds.outHeight > 0) { "Not a decodable image" }
+            target.absolutePath
+        }.getOrNull()
+        if (copied == null) {
+            Toast.makeText(context, R.string.settings_background_image_copy_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        onValueChange(copied)
+        Toast.makeText(context, R.string.settings_background_image_picked, Toast.LENGTH_SHORT).show()
+    }
+
+    val picker = registryOwner?.let {
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            applyPickedImage(uri)
+        }
+    }
+    val hostLauncher: (() -> Unit)? = if (picker == null && hostActivity != null) {
+        {
+            val requestCode = HostActivityResultBridge.register { resultCode, uri ->
+                if (resultCode == Activity.RESULT_OK) applyPickedImage(uri)
+            }
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/*"
+            }
+            runCatching { hostActivity.startActivityForResult(intent, requestCode) }
+                .onFailure { error ->
+                    HostActivityResultBridge.dispatch(requestCode, Activity.RESULT_CANCELED, null)
+                    Toast.makeText(context, error.message ?: error.javaClass.simpleName, Toast.LENGTH_SHORT).show()
+                }
+        }
+    } else {
+        null
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.settings_background_image_title),
+            style = MiuixTheme.textStyles.main
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = stringResource(R.string.settings_background_image_desc),
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MiuixTheme.textStyles.body2
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        if (value.isNotEmpty()) {
+            val preview = remember(value) {
+                runCatching {
+                    BitmapFactory.decodeFile(value, BitmapFactory.Options().apply { inSampleSize = 4 })
+                }.getOrNull()
+            }
+            if (preview != null) {
+                Image(
+                    bitmap = preview.asImageBitmap(),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .clip(ContinuousRoundedRectangle(12.dp)),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+        val launchPick: (() -> Unit)? = when {
+            picker != null -> ({ picker.launch(arrayOf("image/*")) })
+            hostLauncher != null -> hostLauncher
+            else -> null
+        }
+        if (launchPick != null) {
+            BasicComponent(
+                title = stringResource(R.string.settings_background_image_pick),
+                titleColor = BasicComponentDefaults.titleColor(
+                    color = MiuixTheme.colorScheme.primary
+                ),
+                onClick = launchPick
+            )
+        }
+        if (value.isNotEmpty()) {
+            BasicComponent(
+                title = stringResource(R.string.settings_background_image_clear),
+                titleColor = BasicComponentDefaults.titleColor(
+                    color = MiuixTheme.colorScheme.primary
+                ),
+                onClick = { onValueChange("") }
+            )
+        }
     }
 }
 

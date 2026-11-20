@@ -41,6 +41,8 @@ object WeTypeSettings {
     private const val KEY_TOOLBAR_ICON_BG_OPACITY = "toolbar_icon_bg_opacity"
     private const val KEY_CUSTOM_ICON_PATH = "custom_icon_path"
     private const val KEY_ICON_SCALE = "icon_scale"
+    private const val KEY_BACKGROUND_IMAGE_PATH = "background_image_path"
+    private const val KEY_BACKGROUND_BRIGHTNESS = "background_brightness"
     const val DEFAULT_LIGHT_COLOR = 0xBDD4D4D4.toInt()
     const val DEFAULT_DARK_COLOR = 0x40000000
     const val DEFAULT_HYPER_MATERIAL_ENABLED = false
@@ -63,6 +65,11 @@ object WeTypeSettings {
     const val DEFAULT_ICON_SCALE = 1.0f
     const val MIN_ICON_SCALE = 0.6f
     const val MAX_ICON_SCALE = 1.4f
+    const val DEFAULT_BACKGROUND_IMAGE_PATH = ""
+    /** 50 = unchanged; lower darkens the image, higher brightens it. */
+    const val DEFAULT_BACKGROUND_BRIGHTNESS = 50
+    const val MIN_BACKGROUND_BRIGHTNESS = 0
+    const val MAX_BACKGROUND_BRIGHTNESS = 100
 
     private val legacyKeyColorDefaults = mapOf(
         LIGHT_KEY_COLOR_GROUP_ID to 0xFFfcfcfe.toInt(),
@@ -99,7 +106,11 @@ object WeTypeSettings {
         val iconScale: Float,
         val hyperMaterialEnabled: Boolean,
         val glassOverrides: GlassMaterialOverrides = GlassMaterialOverrides(),
-        val followingColors: Set<String> = emptySet()
+        val followingColors: Set<String> = emptySet(),
+        /** Absolute path of the per-mode background image; empty disables the image layer. */
+        val backgroundImagePath: String = DEFAULT_BACKGROUND_IMAGE_PATH,
+        /** Image-only brightness trim around [DEFAULT_BACKGROUND_BRIGHTNESS]. */
+        val backgroundBrightness: Int = DEFAULT_BACKGROUND_BRIGHTNESS
     )
 
     data class Profiles(
@@ -286,6 +297,9 @@ object WeTypeSettings {
     fun getIconScaleXposed(resources: Resources? = null): Float =
         readSnapshotXposed(resources).iconScale
 
+    fun getBackgroundImagePathXposed(resources: Resources? = null): String =
+        readSnapshotXposed(resources).backgroundImagePath
+
     fun getCandidatePinyinLeftMarginDpXposed(resources: Resources? = null): Int =
         readSnapshotXposed(resources).candidatePinyinLeftMarginDp
 
@@ -397,6 +411,8 @@ object WeTypeSettings {
                 putValue("glass_blur_large", it[1])
             }
             snapshot.glassOverrides.materialType?.let { putValue("glass_material_type", it) }
+            putValue(KEY_BACKGROUND_IMAGE_PATH, snapshot.backgroundImagePath)
+            putValue(KEY_BACKGROUND_BRIGHTNESS, snapshot.backgroundBrightness)
         }
         writeProfile(LIGHT_PROFILE_PREFIX, profiles.light)
         writeProfile(DARK_PROFILE_PREFIX, profiles.dark)
@@ -465,7 +481,9 @@ object WeTypeSettings {
             hyperMaterialEnabled = getBoolean(KEY_HYPER_MATERIAL_ENABLED, DEFAULT_HYPER_MATERIAL_ENABLED),
             glassOverrides = GlassMaterialOverrides.read(this),
             followingColors = if (legacy) emptySet() else getString(KEY_FOLLOWING_COLORS, "")
-                .split(',').toSet()
+                .split(',').toSet(),
+            backgroundImagePath = getString(KEY_BACKGROUND_IMAGE_PATH, DEFAULT_BACKGROUND_IMAGE_PATH),
+            backgroundBrightness = getInt(KEY_BACKGROUND_BRIGHTNESS, DEFAULT_BACKGROUND_BRIGHTNESS)
         ).normalized()
     }
 
@@ -528,7 +546,9 @@ object WeTypeSettings {
         customIconPath = DEFAULT_CUSTOM_ICON_PATH,
         iconScale = DEFAULT_ICON_SCALE,
         appearanceColors = WeTypeAppearanceColorGroups.defaultColors(),
-        hyperMaterialEnabled = DEFAULT_HYPER_MATERIAL_ENABLED
+        hyperMaterialEnabled = DEFAULT_HYPER_MATERIAL_ENABLED,
+        backgroundImagePath = DEFAULT_BACKGROUND_IMAGE_PATH,
+        backgroundBrightness = DEFAULT_BACKGROUND_BRIGHTNESS
     )
 
     fun defaultProfiles(): Profiles = Profiles(defaultSnapshot(false), defaultSnapshot(true))

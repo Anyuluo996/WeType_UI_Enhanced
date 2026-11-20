@@ -60,13 +60,34 @@ internal object WeTypeThemeMode {
                 resolved
             }
         }.onFailure {
-            Log.w(TAG, "Host skin mode unavailable; using resource configuration", it)
-        }.getOrNull() ?: return
+            Log.w(TAG, "Host skin manager scan unavailable; trying the known accessor", it)
+        }.getOrNull()
+            ?: resolveKnownDarkModeAccessor(classLoader)?.also {
+                Log.i(TAG, "Resolved host skin mode from known accessor ${it.declaringClass.name}.${it.name}")
+            }
+            ?: run {
+                Log.w(TAG, "Host skin mode unavailable; using resource configuration")
+                return
+            }
+
+        // Skin light/dark accessors reach UIUtils → ImeMMKV → e7.A(MultiProcessMMKV).
+        // Before the host has stored its base context (e7.u.b()), that class-init fails
+        // and pollutes e7.A for the whole process — including other modules reading
+        // MMKV in the same process. Refuse reads until the context is present.
+        val mmkvGate: (() -> Boolean)? = runCatching {
+            val readContext = classLoader.loadClass("e7.u")
+                .getDeclaredMethod("b")
+                .apply { isAccessible = true }
+            val gate: () -> Boolean = { readContext.invoke(null) != null }
+            gate
+        }.onFailure {
+            Log.w(TAG, "Host MMKV readiness probe unavailable; reads stay ungated", it)
+        }.getOrNull()
 
         val failed = AtomicBoolean(false)
         val reading = ThreadLocal<Boolean>()
         val provider: () -> Boolean? = {
-            if (failed.get() || reading.get() == true) {
+            if (failed.get() || reading.get() == true || (mmkvGate != null && !mmkvGate())) {
                 null
             } else {
                 reading.set(true)
@@ -88,6 +109,21 @@ internal object WeTypeThemeMode {
         WeTypeSettings.setHostDarkModeProvider(provider)
         Log.i(TAG, "Resolved host skin mode from ${accessor.declaringClass.name}")
     }
+
+    /**
+     * WeType 4.0.1 dropped the static `()Z` accessor the skin manager scan expects; its
+     * stable replacement is the standalone `skin.e.l()` entry point (static, no-arg,
+     * boolean) that the host's own UI code calls for the material night mode.
+     */
+    private fun resolveKnownDarkModeAccessor(classLoader: ClassLoader): Method? = runCatching {
+        val accessor = classLoader.loadClass("com.tencent.wetype.plugin.hld.skin.e")
+            .getDeclaredMethod("l")
+        check(Modifier.isStatic(accessor.modifiers))
+        check(accessor.parameterTypes.isEmpty())
+        check(accessor.returnType == Boolean::class.javaPrimitiveType)
+        accessor.isAccessible = true
+        accessor
+    }.getOrNull()
 
     private fun readCachedAccessor(
         classLoader: ClassLoader,

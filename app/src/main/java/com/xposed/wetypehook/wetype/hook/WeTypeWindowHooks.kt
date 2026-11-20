@@ -27,6 +27,7 @@ import com.xposed.wetypehook.xposed.HookEnvironment
 import com.xposed.wetypehook.xposed.findMethodInHierarchy
 import com.xposed.wetypehook.xposed.getObjectAs
 import com.xposed.wetypehook.xposed.hookAfter
+import com.xposed.wetypehook.xposed.hookBefore
 import com.xposed.wetypehook.xposed.invokeMethodAs
 import com.xposed.wetypehook.xposed.loadClassOrNull
 import com.xposed.wetypehook.wetype.graphics.WeTypeHyperMaterial
@@ -54,6 +55,22 @@ private val WETYPE_HARDWARE_VIEW_ID_NAMES = arrayOf(
     "hardware_keyboard_candidate_right_container"
 )
 
+// Backdrop strips painted over the background carrier: the candidate-area toolbar strip,
+// the navigation-inset strip, and the docked input panel strips (transparent in the
+// default skin, but kept in the set so a reskin can never reintroduce an opaque band).
+private val BACKDROP_ID_FIELDS = arrayOf(
+    "upper_view",
+    "below_view",
+    "input_upper_view",
+    "input_lower_view",
+    "input_below_view",
+    "input_up_view",
+    "input_center_view",
+    "input_center_container",
+    "input_left_view",
+    "input_left_view2"
+)
+
 internal object WeTypeWindowHooks {
     private data class BackgroundStyle(
         val color: Int,
@@ -64,7 +81,9 @@ internal object WeTypeWindowHooks {
         val nightMode: Int,
         val density: Float,
         val hyperMaterialEnabled: Boolean,
-        val hyperMaterialAvailable: Boolean
+        val hyperMaterialAvailable: Boolean,
+        val backgroundImagePath: String = "",
+        val backgroundBrightness: Int = 50
     )
 
     private class ContinuousCornerOutline(val cornerRadii: WeTypeCornerRadii) : ViewOutlineProvider() {
@@ -117,7 +136,8 @@ internal object WeTypeWindowHooks {
         var hardwareViewIds: IntArray? = null,
         var originalWindowStateCaptured: Boolean = false,
         var originalWindowBackground: Drawable? = null,
-        var originalWindowBlurRadius: Int? = null
+        var originalWindowBlurRadius: Int? = null,
+        var bottomHierarchyDumped: Boolean = false
     )
 
     private class BackgroundTextureWaiter(
@@ -171,6 +191,222 @@ internal object WeTypeWindowHooks {
 
     fun hookTransparentOverlayUnderlay() {
         WeTypeOverlayCompositor.install()
+    }
+
+    /**
+     * WeType paints opaque themed backdrops over the background carrier: the candidate/
+     * toolbar strip ([upper_view]), the navigation-inset strip ([below_view]), the docked
+     * input_* panel strips and the candidate bar itself. Clearing their backgrounds lets
+     * the carrier — tint or image — run unbroken from the keys down to the screen edge.
+     */
+    fun hookTransparentBottomBackdrops() {
+        runCatching {
+            fun isBackdrop(view: View): Boolean {
+                val candidateClass = resolveBackdropCandidateClass()
+                if (candidateClass?.isInstance(view) == true) return true
+                val id = view.id
+                if (id == View.NO_ID) return false
+                return resolveBackdropIds()?.contains(id) == true
+            }
+
+            // Log the first background applications regardless of the filter, so
+            // `adb logcat -s WeTypeUISkin` shows which views actually receive skins.
+            fun probe(view: View) {
+                if (backdropProbeCount >= 40) return
+                backdropProbeCount++
+                runCatching {
+                    android.util.Log.i(
+                        "WeTypeUISkin",
+                        "bg set class=" + view.javaClass.name + " id=0x" +
+                            Integer.toHexString(view.id) + " w=" + view.width
+                    )
+                }
+            }
+
+            View::class.java.getMethod(
+                "setBackground",
+                Drawable::class.java
+            ).hookBefore { param ->
+                val view = param.thisObject as? View ?: return@hookBefore
+                probe(view)
+                if (isBackdrop(view)) {
+                    logBackdropCleared(view)
+                    param.args[0] = null
+                }
+            }
+            // setBackground delegates to setBackgroundDrawable inside the framework; the
+            // deprecated method is still callable directly by host code.
+            View::class.java.getMethod(
+                "setBackgroundDrawable",
+                Drawable::class.java
+            ).hookBefore { param ->
+                val view = param.thisObject as? View ?: return@hookBefore
+                probe(view)
+                if (isBackdrop(view)) {
+                    logBackdropCleared(view)
+                    param.args[0] = null
+                }
+            }
+            View::class.java.getMethod(
+                "setBackgroundResource",
+                Int::class.javaPrimitiveType
+            ).hookBefore { param ->
+                val view = param.thisObject as? View ?: return@hookBefore
+                probe(view)
+                // 0 clears the background resource.
+                if (isBackdrop(view)) {
+                    logBackdropCleared(view)
+                    param.args[0] = 0
+                }
+            }
+            // The skin applier Ob/f calls setBackgroundColor; force the transparent color
+            // instead of a skin tint for the backdrop strips.
+            View::class.java.getMethod(
+                "setBackgroundColor",
+                Int::class.javaPrimitiveType
+            ).hookBefore { param ->
+                val view = param.thisObject as? View ?: return@hookBefore
+                probe(view)
+                if (isBackdrop(view)) {
+                    logBackdropCleared(view)
+                    param.args[0] = Color.TRANSPARENT
+                }
+            }
+            // The skin applier Ob/n paints through the foreground slot.
+            View::class.java.getMethod(
+                "setForeground",
+                Drawable::class.java
+            ).hookBefore { param ->
+                val view = param.thisObject as? View ?: return@hookBefore
+                probe(view)
+                if (isBackdrop(view)) {
+                    logBackdropCleared(view)
+                    param.args[0] = null
+                }
+            }
+            android.util.Log.i("WeTypeUISkin", "backdrop hooks installed")
+            Log.i("Success: Hook WeType transparent bottom backdrops")
+        }.onFailure {
+            android.util.Log.i("WeTypeUISkin", "backdrop hooks failed: " + it.message)
+            Log.i("Failed: Hook WeType transparent bottom backdrops")
+            Log.i(it)
+        }
+    }
+
+    // WeType 4.x keeps the plugin classes (candidate bar, R class) in a dex that is not
+    // necessarily loaded when Application.attach runs the hook install. Resolve them on
+    // the first background call instead — inflation implies the loader is ready.
+    @Volatile
+    private var backdropCandidateClass: Class<*>? = null
+    @Volatile
+    private var backdropIdsResolved = false
+    @Volatile
+    private var backdropIds: IntArray = IntArray(0)
+    private var backdropLogCount = 0
+    private var backdropProbeCount = 0
+
+    private fun resolveBackdropCandidateClass(): Class<*>? {
+        backdropCandidateClass?.let { return it }
+        val resolved = runCatching {
+            loadClassOrNull("com.tencent.wetype.plugin.hld.candidate.ImeCandidateView")
+        }.getOrNull()
+        if (resolved != null) backdropCandidateClass = resolved
+        return resolved
+    }
+
+    private fun resolveBackdropIds(): IntArray? {
+        if (backdropIdsResolved) return backdropIds
+        val sClass = loadClassOrNull("com.tencent.wetype.plugin.hld.s") ?: return null
+        val resolved = BACKDROP_ID_FIELDS.mapNotNull { name ->
+            runCatching { sClass.getField(name).getInt(null) }.getOrNull()
+        }.toIntArray()
+        backdropIds = resolved
+        backdropIdsResolved = true
+        return resolved
+    }
+
+    private fun logBackdropCleared(view: View) {
+        if (backdropLogCount >= 30) return
+        backdropLogCount++
+        runCatching {
+            android.util.Log.i(
+                "WeTypeUISkin",
+                "clear backdrop class=" + view.javaClass.name + " id=0x" +
+                    Integer.toHexString(view.id)
+            )
+        }
+    }
+
+    /**
+     * One-shot diagnostic: log every view whose bounds reach the bottom 45% of the IME
+     * window, with its background/foreground drawables and self-draw flag. This names the
+     * actual painter of any strip the backdrop hooks fail to clear.
+     */
+    private fun dumpBottomHierarchy(decorView: View, state: WeTypeWindowState) {
+        if (state.bottomHierarchyDumped) return
+        state.bottomHierarchyDumped = true
+        runCatching {
+            val rootHeight = decorView.height
+            if (rootHeight <= 0) {
+                // Not laid out yet; retry on the next frame.
+                state.bottomHierarchyDumped = false
+                return
+            }
+            val cutoff = rootHeight * 55 / 100
+            val location = IntArray(2)
+            var lines = 0
+            fun walk(view: View, depth: Int) {
+                if (lines >= 80) return
+                view.getLocationInWindow(location)
+                val top = location[1] - decorView.top
+                val bottom = top + view.height
+                if (bottom >= cutoff) {
+                    lines++
+                    android.util.Log.i(
+                        "WeTypeUISkin",
+                        "v" + depth + " " + view.javaClass.name +
+                            " id=0x" + Integer.toHexString(view.id) +
+                            " [" + view.left + "," + top + "," + (view.left + view.width) + "," + bottom + "]" +
+                            " vis=" + view.visibility +
+                            " bg=" + (view.background?.javaClass?.simpleName ?: "null") +
+                            " fg=" + (view.foreground?.javaClass?.simpleName ?: "null") +
+                            " selfDraw=" + !view.willNotDraw()
+                    )
+                }
+                if (view is ViewGroup) {
+                    for (index in 0 until view.childCount) walk(view.getChildAt(index), depth + 1)
+                }
+            }
+            walk(decorView, 0)
+            android.util.Log.i("WeTypeUISkin", "hierarchy dump done lines=" + lines)
+        }
+    }
+
+    /**
+     * The host re-tints the system navigation strip through Window.setNavigationBarColor
+     * at runtime. Keep it transparent and drop the contrast scrim so the carrier reaches
+     * the screen edge; the gesture pill itself keeps the system styling.
+     */
+    fun hookTransparentNavigationBar() {
+        runCatching {
+            Window::class.java.getMethod(
+                "setNavigationBarColor",
+                Int::class.javaPrimitiveType
+            ).hookBefore { param ->
+                param.args[0] = Color.TRANSPARENT
+                val window = param.thisObject as? Window ?: return@hookBefore
+                runCatching {
+                    Window::class.java.getMethod(
+                        "setNavigationBarContrastEnforced",
+                        Boolean::class.javaPrimitiveType
+                    ).invoke(window, false)
+                }
+            }
+            Log.i("Success: Hook WeType transparent navigation bar")
+        }.onFailure {
+            Log.i("Failed: Hook WeType transparent navigation bar")
+            Log.i(it)
+        }
     }
 
     fun reconcileCurrentOverlayUnderlays(rootViews: List<View>) {
@@ -683,7 +919,12 @@ internal object WeTypeWindowHooks {
         width: Int = parent.width
     ) {
         val settings = WeTypeSettings.readSnapshotXposed(context.resources)
-        val overrides = if (settings.hyperMaterialEnabled && WeTypeHyperMaterial.areGlassOverridesAvailable()) {
+        // The image replaces the background surface entirely; the native glass material
+        // samples behind the window and would fight the bitmap, so it is bypassed.
+        val imageActive = settings.backgroundImagePath.isNotBlank()
+        val overrides = if (settings.hyperMaterialEnabled && !imageActive &&
+            WeTypeHyperMaterial.areGlassOverridesAvailable()
+        ) {
             settings.glassOverrides
         } else GlassMaterialOverrides()
         val carrier = ensureBackgroundCarrier(context, parent, state, overrides)
@@ -698,10 +939,12 @@ internal object WeTypeWindowHooks {
                 Configuration.UI_MODE_NIGHT_YES
             } else Configuration.UI_MODE_NIGHT_NO,
             density = context.resources.displayMetrics.density,
-            hyperMaterialEnabled = settings.hyperMaterialEnabled,
-            hyperMaterialAvailable = if (state.backgroundStyleDirty || state.backgroundStyle == null) {
+            hyperMaterialEnabled = settings.hyperMaterialEnabled && !imageActive,
+            hyperMaterialAvailable = if (imageActive) false else if (state.backgroundStyleDirty || state.backgroundStyle == null) {
                 WeTypeHyperMaterial.isAvailable(context)
-            } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable
+            } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable,
+            backgroundImagePath = settings.backgroundImagePath,
+            backgroundBrightness = settings.backgroundBrightness
         )
         val viewRoot = if (state.backgroundStyleDirty || carrier.background == null) {
             runCatching { carrier.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull()
@@ -744,6 +987,10 @@ internal object WeTypeWindowHooks {
         state.backgroundBounds.set(left, top, left + width, top + height)
         layoutBackgroundCarrier(carrier, state.backgroundBounds)
         if (style.hyperMaterialEnabled) state.hyperMaterial?.updateGeometry(cornerRadii)
+        // One-shot diagnostic for the backdrop hunt: main IME decor only.
+        if (carrier.parent?.javaClass?.name?.endsWith("DecorView") == true) {
+            dumpBottomHierarchy(carrier.parent as View, state)
+        }
     }
 
     private fun restoreInactiveBackgroundGeometry(state: WeTypeWindowState) {
@@ -848,6 +1095,15 @@ internal object WeTypeWindowHooks {
         WETYPE_HARDWARE_VIEW_ID_NAMES.mapNotNull { name ->
             context.resources.getIdentifier(name, "id", context.packageName)
                 .takeIf { it != 0 }
+            ?: runCatching {
+                // WeType 4.0.1 obfuscates id names in the resource table, so the lookup by
+                // name fails; the host R class still keeps the original field names.
+                loadClassOrNull("com.tencent.wetype.plugin.hld.s")
+                    ?.getDeclaredField(name)
+                    ?.apply { isAccessible = true }
+                    ?.getInt(null)
+                    ?.takeIf { it != 0 }
+            }.getOrNull()
         }.toIntArray()
 
     private fun hideBackgroundCarrier(state: WeTypeWindowState) {
@@ -897,6 +1153,13 @@ internal object WeTypeWindowHooks {
         val blurDrawable = createInternalBackgroundBlurDrawable(targetView, blurRadius, cornerRadii)
         val layers = buildList {
             blurDrawable?.also(::add)
+            // The image sits under the tint so the existing color/alpha slider doubles
+            // as its readability scrim. An image with alpha keeps the blur visible.
+            if (style.backgroundImagePath.isNotBlank()) {
+                WeTypeBackgroundImage.decode(style.backgroundImagePath)?.let { bitmap ->
+                    add(WeTypeBackgroundImageDrawable(bitmap, style.backgroundBrightness))
+                }
+            }
             add(tintDrawable)
             if (edgeHighlightEnabled) {
                 add(

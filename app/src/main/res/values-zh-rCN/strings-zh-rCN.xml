@@ -76,6 +76,13 @@
     <string name="settings_icon_shape_reset">恢复默认图标</string>
     <string name="settings_icon_shape_import_empty">所选文件中没有找到 path 元素</string>
     <string name="settings_icon_shape_imported">已导入 %1$d 条 path</string>
+    <string name="settings_background_image_title">自定义背景图片</string>
+    <string name="settings_background_image_desc">为当前模式的键盘背景选择一张图片；原有背景色会叠加在图片上方，调低其不透明度即可露出图片。</string>
+    <string name="settings_background_image_pick">选择图片…</string>
+    <string name="settings_background_image_clear">清除背景图片</string>
+    <string name="settings_background_image_picked">背景图片已设置</string>
+    <string name="settings_background_image_copy_failed">无法读取所选图片</string>
+    <string name="settings_background_brightness_title">背景亮度</string>
     <string name="settings_light_key_color_title">浅色模式按键色</string>
     <string name="settings_dark_key_color_title">深色模式按键色</string>
     <string name="settings_key_color_group_summary">透明度请用下方滑块调整 · 当前 %1$d / 255 · %2$d 个映射项</string>

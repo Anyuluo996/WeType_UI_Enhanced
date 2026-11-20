@@ -354,6 +354,8 @@ class MainHook : XposedModule() {
         HookEnvironment.withHookScope("wetype.about-entry") { hookWeTypeAboutLogoEntry() }
         HookEnvironment.withHookScope("wetype.keyboard-logo") { WeTypeResourceHooks.hookKeyboardLogo() }
         HookEnvironment.withHookScope("wetype.toolbar-icon") { WeTypeResourceHooks.hookToolbarIconBackground() }
+        HookEnvironment.withHookScope("wetype.transparent-bottom-areas") { WeTypeWindowHooks.hookTransparentBottomBackdrops() }
+        HookEnvironment.withHookScope("wetype.transparent-nav-bar") { WeTypeWindowHooks.hookTransparentNavigationBar() }
     }
 
     private fun installBaseImeHooks(forceTransparentBottomView: Boolean) {
