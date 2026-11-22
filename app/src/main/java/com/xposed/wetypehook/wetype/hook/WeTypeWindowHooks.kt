@@ -83,7 +83,8 @@ internal object WeTypeWindowHooks {
         val hyperMaterialEnabled: Boolean,
         val hyperMaterialAvailable: Boolean,
         val backgroundImagePath: String = "",
-        val backgroundBrightness: Int = 50
+        val backgroundBrightness: Int = 50,
+        val backgroundBlur: Int = 0
     )
 
     private class ContinuousCornerOutline(val cornerRadii: WeTypeCornerRadii) : ViewOutlineProvider() {
@@ -491,6 +492,7 @@ internal object WeTypeWindowHooks {
                 state.resourceReconcilePending = false
                 if (state.windowVisible) {
                     WeTypeResourceHooks.reconcileCurrentKeyboardLogos(listOf(decorView))
+                    WeTypeResourceHooks.reconcileCurrentToolbarIconBackgrounds(listOf(decorView))
                 }
             }) {
             state.resourceReconcilePending = false
@@ -929,6 +931,20 @@ internal object WeTypeWindowHooks {
         } else GlassMaterialOverrides()
         val carrier = ensureBackgroundCarrier(context, parent, state, overrides)
         carrier.visibility = View.VISIBLE
+        // 毛玻璃:GPU 高斯模糊(RenderEffect,minSdk 31)对承载背景的 carrier 视图整体生效,
+        // 质量优于低分辨率 CPU 模糊(无条纹/色带),且低强度仍能透出背景图结构。
+        runCatching {
+            if (settings.backgroundImagePath.isNotBlank() && settings.backgroundBlur > 0) {
+                val radiusPx = settings.backgroundBlur * context.resources.displayMetrics.density
+                carrier.setRenderEffect(
+                    android.graphics.RenderEffect.createBlurEffect(
+                        radiusPx, radiusPx, android.graphics.Shader.TileMode.CLAMP
+                    )
+                )
+            } else {
+                carrier.setRenderEffect(null)
+            }
+        }.onFailure { Log.i("Failed to apply background render effect") }
         val style = BackgroundStyle(
             color = settings.backgroundColor,
             blurRadius = settings.blurRadius,
@@ -944,7 +960,8 @@ internal object WeTypeWindowHooks {
                 WeTypeHyperMaterial.isAvailable(context)
             } else checkNotNull(state.backgroundStyle).hyperMaterialAvailable,
             backgroundImagePath = settings.backgroundImagePath,
-            backgroundBrightness = settings.backgroundBrightness
+            backgroundBrightness = settings.backgroundBrightness,
+            backgroundBlur = settings.backgroundBlur
         )
         val viewRoot = if (state.backgroundStyleDirty || carrier.background == null) {
             runCatching { carrier.invokeMethodAs<Any>("getViewRootImpl") }.getOrNull()

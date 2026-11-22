@@ -334,6 +334,7 @@ class MainHook : XposedModule() {
 
         HookEnvironment.withHookScope("wetype.activation") { hookActivationHeartbeat(sourcePackage) }
         HookEnvironment.withHookScope("wetype.font") { hookWeTypeFont() }
+        HookEnvironment.withHookScope("wetype.paint-typeface") { WeTypeResourceHooks.hookKeyboardPaintTypeface(::getModuleAssetManager) }
         HookEnvironment.withHookScope("wetype.keyboard-symbols") {
             WeTypeKeyboardSymbols.hook(::getModuleAssetManager)
         }
@@ -341,6 +342,10 @@ class MainHook : XposedModule() {
         HookEnvironment.withHookScope("wetype.overlay-underlay") { WeTypeWindowHooks.hookTransparentOverlayUnderlay() }
         HookEnvironment.withHookScope("wetype.self-draw-colors") { hookWeTypeSelfDrawKeyColors() }
         HookEnvironment.withHookScope("wetype.key-corner") { hookWeTypeKeyboardKeyCorner() }
+        HookEnvironment.withHookScope("wetype.key-text-color") { hookWeTypeKeyboardKeyTextColor() }
+        HookEnvironment.withHookScope("wetype.cn-en-label-color") { WeTypeResourceHooks.hookCnEnLabelColor() }
+        HookEnvironment.withHookScope("wetype.switch-label-tint") { WeTypeResourceHooks.hookKeyboardSwitchLabelTint() }
+        HookEnvironment.withHookScope("wetype.glyph-bitmap-recolor") { WeTypeResourceHooks.hookGlyphBitmapRecolor() }
         HookEnvironment.withHookScope("wetype.key-smooth-corner") { WeTypeKeyboardCorners.hook() }
         HookEnvironment.withHookScope("wetype.candidate-text") { hookWeTypeCandidateSpecialTextColor() }
         HookEnvironment.withHookScope("wetype.candidate-alpha") { hookWeTypeCandidateBackgroundAlpha() }
@@ -354,6 +359,8 @@ class MainHook : XposedModule() {
         HookEnvironment.withHookScope("wetype.about-entry") { hookWeTypeAboutLogoEntry() }
         HookEnvironment.withHookScope("wetype.keyboard-logo") { WeTypeResourceHooks.hookKeyboardLogo() }
         HookEnvironment.withHookScope("wetype.toolbar-icon") { WeTypeResourceHooks.hookToolbarIconBackground() }
+        HookEnvironment.withHookScope("wetype.popup-bg-tint") { WeTypeResourceHooks.hookPopupBackgroundTint() }
+        HookEnvironment.withHookScope("wetype.popup-switch-drawer") { WeTypeResourceHooks.hookSwitchDrawerPopupColor() }
         HookEnvironment.withHookScope("wetype.transparent-bottom-areas") { WeTypeWindowHooks.hookTransparentBottomBackdrops() }
         HookEnvironment.withHookScope("wetype.transparent-nav-bar") { WeTypeWindowHooks.hookTransparentNavigationBar() }
     }
@@ -881,6 +888,10 @@ class MainHook : XposedModule() {
         WeTypeResourceHooks.hookKeyboardKeyCorner()
     }
 
+    private fun hookWeTypeKeyboardKeyTextColor() {
+        WeTypeResourceHooks.hookKeyboardKeyTextColor()
+    }
+
     private fun hookWeTypeCandidateSpecialTextColor() {
         WeTypeResourceHooks.hookCandidateSpecialTextColor()
     }
@@ -1365,6 +1376,7 @@ class MainHook : XposedModule() {
             val windowViews = currentProcessWindowViews()
             WeTypeWindowHooks.reconcileCurrentOverlayUnderlays(windowViews)
             WeTypeResourceHooks.reconcileCurrentKeyboardLogos(windowViews)
+            WeTypeResourceHooks.reconcileCurrentToolbarIconBackgrounds(windowViews)
         }
         if (!reconciled) {
             Log.e("Failed:Reconcile current WeType UI after hot reload")

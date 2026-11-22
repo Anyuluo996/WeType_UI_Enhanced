@@ -39,10 +39,14 @@ object WeTypeSettings {
     private const val KEY_APPEARANCE_COLOR_PREFIX = "appearance_color_"
     private const val KEY_DISABLE_HOT_UPDATE = "disable_hot_update"
     private const val KEY_TOOLBAR_ICON_BG_OPACITY = "toolbar_icon_bg_opacity"
+    private const val KEY_HOST_RESTART_TOKEN = "host_restart_token"
+    private const val KEY_POPUP_BG_ALPHA = "popup_bg_alpha"
     private const val KEY_CUSTOM_ICON_PATH = "custom_icon_path"
+    private const val KEY_CUSTOM_FONT_PATH = "custom_font_path"
     private const val KEY_ICON_SCALE = "icon_scale"
     private const val KEY_BACKGROUND_IMAGE_PATH = "background_image_path"
     private const val KEY_BACKGROUND_BRIGHTNESS = "background_brightness"
+    private const val KEY_BACKGROUND_BLUR = "background_blur"
     const val DEFAULT_LIGHT_COLOR = 0xBDD4D4D4.toInt()
     const val DEFAULT_DARK_COLOR = 0x40000000
     const val DEFAULT_HYPER_MATERIAL_ENABLED = false
@@ -62,6 +66,15 @@ object WeTypeSettings {
     const val DEFAULT_TOOLBAR_ICON_BG_OPACITY = 150
     const val DEFAULT_DISABLE_HOT_UPDATE = true
     const val DEFAULT_CUSTOM_ICON_PATH = ""
+    const val DEFAULT_CUSTOM_FONT_PATH = ""
+
+    /** Larger sources freeze the host settings UI (full-text TextField) and the keyboard's first icon draw. */
+    const val MAX_ICON_SOURCE_CHARS = 128 * 1024
+    const val MAX_ICON_PATH_COUNT = 200
+
+    /** Legacy installs may hold unbounded SVGs in prefs; drop them on read so the UI self-heals. */
+    fun sanitizeIconSource(source: String): String =
+        if (source.length > MAX_ICON_SOURCE_CHARS) DEFAULT_CUSTOM_ICON_PATH else source
     const val DEFAULT_ICON_SCALE = 1.0f
     const val MIN_ICON_SCALE = 0.6f
     const val MAX_ICON_SCALE = 1.4f
@@ -70,6 +83,10 @@ object WeTypeSettings {
     const val DEFAULT_BACKGROUND_BRIGHTNESS = 50
     const val MIN_BACKGROUND_BRIGHTNESS = 0
     const val MAX_BACKGROUND_BRIGHTNESS = 100
+    const val DEFAULT_BACKGROUND_BLUR = 0
+    const val MAX_BACKGROUND_BLUR = 25
+    const val DEFAULT_POPUP_BG_ALPHA = 255
+    const val MAX_POPUP_BG_ALPHA = 255
 
     private val legacyKeyColorDefaults = mapOf(
         LIGHT_KEY_COLOR_GROUP_ID to 0xFFfcfcfe.toInt(),
@@ -110,7 +127,13 @@ object WeTypeSettings {
         /** Absolute path of the per-mode background image; empty disables the image layer. */
         val backgroundImagePath: String = DEFAULT_BACKGROUND_IMAGE_PATH,
         /** Image-only brightness trim around [DEFAULT_BACKGROUND_BRIGHTNESS]. */
-        val backgroundBrightness: Int = DEFAULT_BACKGROUND_BRIGHTNESS
+        val backgroundBrightness: Int = DEFAULT_BACKGROUND_BRIGHTNESS,
+        /** Frosted-glass blur strength applied to the background image; 0 keeps it sharp. */
+        val backgroundBlur: Int = DEFAULT_BACKGROUND_BLUR,
+        /** Opacity applied to the long-press popup color; 255 keeps the picked color untouched. */
+        val popupBgAlpha: Int = DEFAULT_POPUP_BG_ALPHA,
+        /** Absolute path of the user-picked .ttf/.otf; empty keeps the built-in SF replacement. */
+        val customFontPath: String = DEFAULT_CUSTOM_FONT_PATH
     )
 
     data class Profiles(
@@ -218,21 +241,49 @@ object WeTypeSettings {
                 val directory = File(appContext.applicationInfo.dataDir, "shared_prefs")
                 directory.mkdirs()
                 val file = File(directory, "$PREF_GROUP.xml")
-                hostFile = HostPreferencesFile(file)
+                val preferencesFile = HostPreferencesFile(file)
+                hostFile = preferencesFile
                 hostFileObserver = object : FileObserver(
                     directory, CLOSE_WRITE or MOVED_TO or MOVED_FROM or DELETE
                 ) {
                     override fun onEvent(event: Int, path: String?) {
                         if (path == file.name || path == "${file.name}.bak") {
                             snapshotDirty.set(true)
+                            handleHostRestartToken(preferencesFile)
                         }
                     }
-                }.also { it.startWatching() }
+                }.also {
+                    it.startWatching()
+                    // 以进程启动时文件里的令牌为基线,只有之后的新令牌才触发重启。
+                    lastSeenRestartToken = runCatching {
+                        preferencesFile.read()[KEY_HOST_RESTART_TOKEN] as? String
+                    }.getOrNull()
+                }
             }
             // Refresh at input/view entry too, including after a process was frozen.
             snapshotDirty.set(true)
             readProfilesXposed()
         }
+    }
+
+    /**
+     * 皮肤资源与 KeyData 颜色在进程启动期一次性解析,键盘进程(:hld)需要重启才能重载。
+     * save() 把重启令牌写进配置文件;观察者在每个 hooked 进程回调,发现新令牌时:
+     * 保存进程跳过自身,键盘进程直接自杀,由系统在下次需要键盘时重新绑定。
+     */
+    private val ignoredRestartTokens: MutableSet<String> =
+        java.util.Collections.synchronizedSet(java.util.HashSet())
+
+    @Volatile
+    private var lastSeenRestartToken: String? = null
+
+    private fun handleHostRestartToken(file: HostPreferencesFile) {
+        val token = runCatching { file.read()[KEY_HOST_RESTART_TOKEN] as? String }.getOrNull() ?: return
+        if (token == lastSeenRestartToken) return
+        lastSeenRestartToken = token
+        if (token in ignoredRestartTokens) return
+        Log.i(TAG, "Restarting keyboard process to reload settings")
+        android.os.Process.killProcess(android.os.Process.myPid())
     }
 
     fun save(
@@ -251,7 +302,10 @@ object WeTypeSettings {
             synchronized(settingsLock) {
                 checkNotNull(hostFile).withLock {
                     val preferences = appContext.getSharedPreferences(PREF_GROUP, Context.MODE_PRIVATE)
-                    writeProfiles(preferences, normalized)
+                    // 令牌在 commit 前登记,保证观察者回调时一定命中忽略集合。
+                    val restartToken = UUID.randomUUID().toString()
+                    ignoredRestartTokens.add(restartToken)
+                    writeProfiles(preferences, normalized, restartToken)
                 }.also { saved ->
                     if (saved) cachedXposedProfiles = normalized
                     snapshotDirty.set(true)
@@ -300,6 +354,15 @@ object WeTypeSettings {
     fun getBackgroundImagePathXposed(resources: Resources? = null): String =
         readSnapshotXposed(resources).backgroundImagePath
 
+    fun getBackgroundBlurXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).backgroundBlur
+
+    fun getPopupBgAlphaXposed(resources: Resources? = null): Int =
+        readSnapshotXposed(resources).popupBgAlpha
+
+    fun getCustomFontPathXposed(resources: Resources? = null): String =
+        readSnapshotXposed(resources).customFontPath
+
     fun getCandidatePinyinLeftMarginDpXposed(resources: Resources? = null): Int =
         readSnapshotXposed(resources).candidatePinyinLeftMarginDp
 
@@ -340,7 +403,11 @@ object WeTypeSettings {
         }
     }
 
-    private fun writeProfiles(preferences: SharedPreferences, profiles: Profiles): Boolean {
+    private fun writeProfiles(
+        preferences: SharedPreferences,
+        profiles: Profiles,
+        restartToken: String? = null
+    ): Boolean {
         val editor = preferences.edit()
         for (prefix in listOf(LIGHT_PROFILE_PREFIX, DARK_PROFILE_PREFIX)) {
             // Null overrides must erase any previous profile value without reviving legacy values.
@@ -366,7 +433,8 @@ object WeTypeSettings {
         // A fresh token forces a disk write even if another process changed the file
         // while this process still has the same values in its SharedPreferences cache.
         editor.putString(KEY_WRITE_TOKEN, UUID.randomUUID().toString())
-            .remove("host_sync_pending")
+        restartToken?.let { editor.putString(KEY_HOST_RESTART_TOKEN, it) }
+        editor.remove("host_sync_pending")
             .remove("host_sync_revision")
             .remove("remote_sync_pending")
             .remove("last_imported_revision")
@@ -413,6 +481,9 @@ object WeTypeSettings {
             snapshot.glassOverrides.materialType?.let { putValue("glass_material_type", it) }
             putValue(KEY_BACKGROUND_IMAGE_PATH, snapshot.backgroundImagePath)
             putValue(KEY_BACKGROUND_BRIGHTNESS, snapshot.backgroundBrightness)
+            putValue(KEY_BACKGROUND_BLUR, snapshot.backgroundBlur)
+            putValue(KEY_POPUP_BG_ALPHA, snapshot.popupBgAlpha)
+            putValue(KEY_CUSTOM_FONT_PATH, snapshot.customFontPath)
         }
         writeProfile(LIGHT_PROFILE_PREFIX, profiles.light)
         writeProfile(DARK_PROFILE_PREFIX, profiles.dark)
@@ -467,7 +538,10 @@ object WeTypeSettings {
             candidateBackgroundLeftMarginDp = getInt(KEY_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP, DEFAULT_CANDIDATE_BACKGROUND_LEFT_MARGIN_DP),
             candidatePinyinLeftMarginDp = getInt(KEY_CANDIDATE_PINYIN_LEFT_MARGIN_DP, DEFAULT_CANDIDATE_PINYIN_LEFT_MARGIN_DP),
             toolbarIconBgOpacity = getInt(KEY_TOOLBAR_ICON_BG_OPACITY, DEFAULT_TOOLBAR_ICON_BG_OPACITY),
-            customIconPath = getString(KEY_CUSTOM_ICON_PATH, DEFAULT_CUSTOM_ICON_PATH),
+            customIconPath = sanitizeIconSource(getString(KEY_CUSTOM_ICON_PATH, DEFAULT_CUSTOM_ICON_PATH)),
+            customFontPath = getString(KEY_CUSTOM_FONT_PATH, DEFAULT_CUSTOM_FONT_PATH),
+            backgroundBlur = getInt(KEY_BACKGROUND_BLUR, DEFAULT_BACKGROUND_BLUR).coerceIn(0, MAX_BACKGROUND_BLUR),
+            popupBgAlpha = getInt(KEY_POPUP_BG_ALPHA, DEFAULT_POPUP_BG_ALPHA).coerceIn(0, MAX_POPUP_BG_ALPHA),
             iconScale = getFloat(KEY_ICON_SCALE, DEFAULT_ICON_SCALE),
             appearanceColors = WeTypeAppearanceColorGroups.groups.associate { group ->
                 val fallbackColor = if (legacy && group.id == ICON_COLOR_GROUP_ID) {

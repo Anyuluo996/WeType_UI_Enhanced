@@ -76,6 +76,17 @@
     <string name="settings_icon_shape_reset">恢复默认图标</string>
     <string name="settings_icon_shape_import_empty">所选文件中没有找到 path 元素</string>
     <string name="settings_icon_shape_imported">已导入 %1$d 条 path</string>
+    <string name="settings_icon_shape_import_too_large">SVG 文档超过 %1$d KB，无法导入；请先简化或扁平化为 path</string>
+    <string name="settings_icon_shape_import_too_many">SVG 包含 %1$d 条 path（上限 %2$d 条），无法导入；请先简化</string>
+    <string name="settings_icon_shape_collapsed">源码过长，此处仅折叠显示；如需修改请重新导入或恢复默认</string>
+    <string name="settings_font_title">自定义键盘字体</string>
+    <string name="settings_font_desc">选择一个 .ttf/.otf 文件替换键盘字体（按键、候选栏与工具栏共用）；留空则保持内置 SF 替换字体。</string>
+    <string name="settings_font_pick">选择字体…</string>
+    <string name="settings_font_picked">字体已应用；重新打开键盘生效</string>
+    <string name="settings_font_copy_failed">无法读取所选字体文件</string>
+    <string name="settings_font_reset">恢复默认字体</string>
+    <string name="settings_font_preview">字体预览 AaBbGg 123</string>
+    <string name="settings_saved_restarting">已保存，正在重启键盘进程…</string>
     <string name="settings_background_image_title">自定义背景图片</string>
     <string name="settings_background_image_desc">为当前模式的键盘背景选择一张图片；原有背景色会叠加在图片上方，调低其不透明度即可露出图片。</string>
     <string name="settings_background_image_pick">选择图片…</string>
@@ -83,6 +94,8 @@
     <string name="settings_background_image_picked">背景图片已设置</string>
     <string name="settings_background_image_copy_failed">无法读取所选图片</string>
     <string name="settings_background_brightness_title">背景亮度</string>
+    <string name="settings_background_blur_title">背景模糊(毛玻璃)</string>
+    <string name="settings_popup_alpha_title">按键弹出面板不透明度</string>
     <string name="settings_light_key_color_title">浅色模式按键色</string>
     <string name="settings_dark_key_color_title">深色模式按键色</string>
     <string name="settings_key_color_group_summary">透明度请用下方滑块调整 · 当前 %1$d / 255 · %2$d 个映射项</string>

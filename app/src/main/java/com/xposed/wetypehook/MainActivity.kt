@@ -12,6 +12,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Path
+import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.view.View
@@ -96,6 +97,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import com.kyant.capsule.ContinuousRoundedRectangle
@@ -459,6 +461,9 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
     var iconScale by mutableFloatStateOf(snapshot.iconScale)
     var backgroundImagePath by mutableStateOf(snapshot.backgroundImagePath)
     var backgroundBrightness by mutableIntStateOf(snapshot.backgroundBrightness)
+    var backgroundBlur by mutableIntStateOf(snapshot.backgroundBlur)
+    var popupBgAlpha by mutableIntStateOf(snapshot.popupBgAlpha)
+    var customFontPath by mutableStateOf(snapshot.customFontPath)
     var previewGlassOverrides by mutableStateOf(snapshot.glassOverrides)
     val glassInput = mutableStateListOf(
         *GlassOverrideField.entries.map { snapshot.glassOverrides.text(it) }.toTypedArray()
@@ -519,7 +524,10 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
         glassOverrides = requireNotNull(parsedGlassOverrides()),
         followingColors = followingColors,
         backgroundImagePath = backgroundImagePath,
-        backgroundBrightness = backgroundBrightness
+        backgroundBrightness = backgroundBrightness,
+        backgroundBlur = backgroundBlur,
+        popupBgAlpha = popupBgAlpha,
+        customFontPath = customFontPath
     )
 
     companion object {
@@ -543,6 +551,9 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
                     put("iconScale", draft.iconScale)
                     put("backgroundImagePath", draft.backgroundImagePath)
                     put("backgroundBrightness", draft.backgroundBrightness)
+                    put("backgroundBlur", draft.backgroundBlur)
+                    put("popupBgAlpha", draft.popupBgAlpha)
+                    put("customFontPath", draft.customFontPath)
                     GlassOverrideField.entries.forEach { field ->
                         put("glass:${field.name}", draft.glassInput[field.ordinal])
                         put("previewGlass:${field.name}", draft.previewGlassOverrides.text(field))
@@ -571,6 +582,9 @@ private class AppearanceDraft(snapshot: WeTypeSettings.Snapshot) {
                     iconScale = values["iconScale"] as Float
                     backgroundImagePath = values["backgroundImagePath"] as? String ?: ""
                     backgroundBrightness = values["backgroundBrightness"] as? Int ?: 50
+                    backgroundBlur = values["backgroundBlur"] as? Int ?: 0
+                    popupBgAlpha = values["popupBgAlpha"] as? Int ?: 255
+                    customFontPath = values["customFontPath"] as? String ?: ""
                     GlassOverrideField.entries.forEach { field ->
                         glassInput[field.ordinal] = values["glass:${field.name}"] as? String ?: ""
                     }
@@ -691,6 +705,9 @@ private fun WeTypeSettingsScreen(
         }
     }
 
+    // 保存写入重启令牌后,键盘进程(:hld)的配置文件观察者会自杀重启,由系统重新绑定;
+    // 设置界面所在的主进程不重启,内嵌编辑器保持存活。
+
     fun saveSettings(): Boolean {
         for ((isDark, profileDraft) in listOf(false to lightDraft, true to darkDraft)) {
             val error = profileDraft.validationError()
@@ -715,7 +732,11 @@ private fun WeTypeSettingsScreen(
             onPersisted = { saved ->
                 Toast.makeText(
                     context,
-                    if (saved) R.string.settings_saved else R.string.settings_save_failed,
+                    when {
+                        saved && isEmbeddedHost -> R.string.settings_saved_restarting
+                        saved -> R.string.settings_saved
+                        else -> R.string.settings_save_failed
+                    },
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -796,7 +817,8 @@ private fun WeTypeSettingsScreen(
                     darkKeyColor = keyColorValue(true),
                     isDark = currentModeIsDark,
                     backgroundImagePath = draft.backgroundImagePath,
-                    backgroundBrightness = draft.backgroundBrightness
+                    backgroundBrightness = draft.backgroundBrightness,
+                    backgroundBlur = draft.backgroundBlur
                 )
             }
         }
@@ -966,6 +988,14 @@ private fun WeTypeSettingsScreen(
                             onValueChange = { draft.backgroundBrightness = it }
                         )
 
+                        SliderPreferenceItem(
+                            title = stringResource(R.string.settings_background_blur_title),
+                            value = draft.backgroundBlur,
+                            max = WeTypeSettings.MAX_BACKGROUND_BLUR,
+                            enabled = draft.backgroundImagePath.isNotBlank(),
+                            onValueChange = { draft.backgroundBlur = it }
+                        )
+
                         HorizontalDivider()
 
                         SliderPreferenceItem(
@@ -988,6 +1018,18 @@ private fun WeTypeSettingsScreen(
                             value = draft.customIconPath,
                             onValueChange = { draft.customIconPath = it },
                             onReset = { draft.customIconPath = WeTypeSettings.DEFAULT_CUSTOM_ICON_PATH }
+                        )
+
+                        FontPreferenceItem(
+                            value = draft.customFontPath,
+                            onValueChange = { draft.customFontPath = it }
+                        )
+
+                        SliderPreferenceItem(
+                            title = stringResource(R.string.settings_popup_alpha_title),
+                            value = draft.popupBgAlpha,
+                            max = WeTypeSettings.MAX_POPUP_BG_ALPHA,
+                            onValueChange = { draft.popupBgAlpha = it }
                         )
 
                         appearanceSectionGroups.forEach { group ->
@@ -1154,7 +1196,8 @@ private fun PreviewSection(
     darkKeyColor: Int,
     isDark: Boolean,
     backgroundImagePath: String,
-    backgroundBrightness: Int
+    backgroundBrightness: Int,
+    backgroundBlur: Int
 ) {
     Column(
         modifier = Modifier.padding(bottom = 16.dp)
@@ -1189,7 +1232,8 @@ private fun PreviewSection(
                         darkKeyColor = darkKeyColor,
                         isDark = isDark,
                         backgroundImagePath = backgroundImagePath,
-                        backgroundBrightness = backgroundBrightness
+                        backgroundBrightness = backgroundBrightness,
+                        backgroundBlur = backgroundBlur
                     )
                 }
             }
@@ -1211,7 +1255,8 @@ private fun PreviewCard(
     darkKeyColor: Int,
     isDark: Boolean,
     backgroundImagePath: String,
-    backgroundBrightness: Int
+    backgroundBrightness: Int,
+    backgroundBlur: Int
 ) {
     val context = LocalContext.current
     val displayColor = if (hyperMaterialEnabled && glassOverrides.glass == null) WeTypeHyperMaterial.fallbackColor(isDark) else color
@@ -1273,7 +1318,12 @@ private fun PreviewCard(
                         bitmap = previewBitmap.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.matchParentSize()
+                        modifier = Modifier
+                            .matchParentSize()
+                            .then(
+                                if (backgroundBlur > 0) Modifier.blur(backgroundBlur.dp)
+                                else Modifier
+                            )
                     )
                     if (backgroundBrightness != 50) {
                         Box(
@@ -1717,6 +1767,9 @@ private fun createPreviewContext(baseContext: Context, isDark: Boolean): Context
     return baseContext.createConfigurationContext(configuration)
 }
 
+/** Beyond this the Compose TextField itself becomes the jank: rendering megabytes of text blocks the host main thread. */
+private const val EDITABLE_ICON_SOURCE_CHARS = 4000
+
 @Composable
 private fun IconShapePreferenceItem(
     value: String,
@@ -1737,11 +1790,34 @@ private fun IconShapePreferenceItem(
                     ?.use { stream -> stream.readBytes().decodeToString() }
             }.getOrNull()
         }
+        if (text != null && text.length > WeTypeSettings.MAX_ICON_SOURCE_CHARS) {
+            Toast.makeText(
+                context,
+                resources.getString(
+                    R.string.settings_icon_shape_import_too_large,
+                    WeTypeSettings.MAX_ICON_SOURCE_CHARS / 1024
+                ),
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
         val paths = text?.let(SvgPathImporter::extractPaths).orEmpty()
         if (paths.isEmpty()) {
             Toast.makeText(
                 context,
                 R.string.settings_icon_shape_import_empty,
+                Toast.LENGTH_SHORT
+            ).show()
+            return
+        }
+        if (paths.size > WeTypeSettings.MAX_ICON_PATH_COUNT) {
+            Toast.makeText(
+                context,
+                resources.getString(
+                    R.string.settings_icon_shape_import_too_many,
+                    paths.size,
+                    WeTypeSettings.MAX_ICON_PATH_COUNT
+                ),
                 Toast.LENGTH_SHORT
             ).show()
             return
@@ -1806,12 +1882,22 @@ private fun IconShapePreferenceItem(
             style = MiuixTheme.textStyles.body2
         )
         Spacer(modifier = Modifier.height(12.dp))
+        // Editing megabytes of text in a Compose TextField froze the host settings page (ANR);
+        // long sources collapse to a read-only preview and change via import/reset only.
+        val editable = value.length <= EDITABLE_ICON_SOURCE_CHARS
         TextField(
-            value = value,
-            onValueChange = onValueChange,
+            value = if (editable) value else value.take(EDITABLE_ICON_SOURCE_CHARS) + "\n…",
+            onValueChange = if (editable) onValueChange else ({}),
             label = stringResource(R.string.settings_icon_shape_label),
             modifier = Modifier.fillMaxWidth()
         )
+        if (!editable) {
+            Text(
+                text = stringResource(R.string.settings_icon_shape_collapsed),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MiuixTheme.textStyles.body2
+            )
+        }
         Spacer(modifier = Modifier.height(4.dp))
         if (launchSvgPicker != null) {
             BasicComponent(
@@ -1959,6 +2045,129 @@ private fun BackgroundImagePreferenceItem(
                     color = MiuixTheme.colorScheme.primary
                 ),
                 onClick = { onValueChange("") }
+            )
+        }
+    }
+}
+
+/**
+ * 自定义键盘字体（.ttf/.otf）。选择后拷贝进模块 filesDir 并存绝对路径，
+ * 键盘侧 hookFont 在宿主读取自身字体资产的位置注入该 Typeface——
+ * 机制与自定义背景图一致；空值表示保持内置 SF 替换。
+ */
+@Composable
+private fun FontPreferenceItem(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val registryOwner = LocalActivityResultRegistryOwner.current
+    val hostActivity = remember(context) { context.findHostActivity() }
+
+    fun applyPickedFont(uri: Uri?) {
+        if (uri == null) return
+        val copied = runCatching {
+            val hint = uri.toString().lowercase()
+            val extension = if (hint.contains(".otf")) ".otf" else ".ttf"
+            val directory = File(context.applicationContext.filesDir, "fonts")
+            directory.mkdirs()
+            directory.listFiles()?.forEach { it.delete() }
+            val target = File(directory, "custom$extension")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            } ?: error("Cannot open the picked font")
+            // 可解码性先在设置进程验证，避免把坏字体文件留给键盘侧静默失败。
+            Typeface.createFromFile(target)
+            target.absolutePath
+        }.getOrNull()
+        if (copied == null) {
+            Toast.makeText(context, R.string.settings_font_copy_failed, Toast.LENGTH_SHORT).show()
+            return
+        }
+        onValueChange(copied)
+        Toast.makeText(context, R.string.settings_font_picked, Toast.LENGTH_SHORT).show()
+    }
+
+    val picker = registryOwner?.let {
+        rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            applyPickedFont(uri)
+        }
+    }
+    val hostLauncher: (() -> Unit)? = if (picker == null && hostActivity != null) {
+        {
+            val requestCode = HostActivityResultBridge.register { resultCode, uri ->
+                if (resultCode == Activity.RESULT_OK) applyPickedFont(uri)
+            }
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            runCatching { hostActivity.startActivityForResult(intent, requestCode) }
+                .onFailure { error ->
+                    HostActivityResultBridge.dispatch(requestCode, Activity.RESULT_CANCELED, null)
+                    Toast.makeText(context, error.message ?: error.javaClass.simpleName, Toast.LENGTH_SHORT).show()
+                }
+        }
+    } else {
+        null
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = stringResource(R.string.settings_font_title),
+            style = MiuixTheme.textStyles.main
+        )
+        Spacer(modifier = Modifier.height(2.dp))
+        Text(
+            text = stringResource(R.string.settings_font_desc),
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MiuixTheme.textStyles.body2
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        if (value.isNotEmpty()) {
+            val face = remember(value) {
+                runCatching { Typeface.createFromFile(value) }.getOrNull()
+            }
+            if (face != null) {
+                Text(
+                    text = stringResource(R.string.settings_font_preview),
+                    fontFamily = FontFamily(typeface = face),
+                    fontSize = 20.sp,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+        }
+        val launchPick: (() -> Unit)? = when {
+            picker != null -> ({ picker.launch(arrayOf("*/*")) })
+            hostLauncher != null -> hostLauncher
+            else -> null
+        }
+        if (launchPick != null) {
+            BasicComponent(
+                title = stringResource(R.string.settings_font_pick),
+                titleColor = BasicComponentDefaults.titleColor(
+                    color = MiuixTheme.colorScheme.primary
+                ),
+                onClick = launchPick
+            )
+        }
+        if (value.isNotEmpty()) {
+            BasicComponent(
+                title = stringResource(R.string.settings_font_reset),
+                titleColor = BasicComponentDefaults.titleColor(
+                    color = MiuixTheme.colorScheme.primary
+                ),
+                onClick = {
+                    runCatching {
+                        File(value).parentFile?.listFiles()?.forEach { it.delete() }
+                    }
+                    onValueChange("")
+                }
             )
         }
     }

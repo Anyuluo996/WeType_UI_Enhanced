@@ -76,6 +76,17 @@
     <string name="settings_icon_shape_reset">Reset icon</string>
     <string name="settings_icon_shape_import_empty">No path element found in the selected file</string>
     <string name="settings_icon_shape_imported">Imported %1$d path(s)</string>
+    <string name="settings_icon_shape_import_too_large">The SVG document exceeds %1$d KB; simplify it or flatten it into paths first</string>
+    <string name="settings_icon_shape_import_too_many">The SVG has %1$d paths (max %2$d); simplify it first</string>
+    <string name="settings_icon_shape_collapsed">Source too long to edit here; re-import a file or reset to change it</string>
+    <string name="settings_font_title">Custom keyboard font</string>
+    <string name="settings_font_desc">Pick a .ttf/.otf file; it replaces the keyboard typeface (keys, candidates and toolbar share it). An empty selection keeps the built-in SF replacement.</string>
+    <string name="settings_font_pick">Choose font…</string>
+    <string name="settings_font_picked">Font applied; reopen the keyboard to see it</string>
+    <string name="settings_font_copy_failed">Cannot read the selected font file</string>
+    <string name="settings_font_reset">Reset font</string>
+    <string name="settings_font_preview">AaBbGg 123 字体预览</string>
+    <string name="settings_saved_restarting">Saved; restarting the keyboard process…</string>
     <string name="settings_background_image_title">Custom background image</string>
     <string name="settings_background_image_desc">Pick a picture for the keyboard background of this mode. The existing background color works as its overlay; lower its opacity to reveal the image.</string>
     <string name="settings_background_image_pick">Choose image…</string>
@@ -83,6 +94,8 @@
     <string name="settings_background_image_picked">Background image set</string>
     <string name="settings_background_image_copy_failed">Could not read the selected image</string>
     <string name="settings_background_brightness_title">Background brightness</string>
+    <string name="settings_background_blur_title">Background blur (frosted glass)</string>
+    <string name="settings_popup_alpha_title">Popup panel opacity</string>
     <string name="settings_light_key_color_title">Light mode key color</string>
     <string name="settings_dark_key_color_title">Dark mode key color</string>
     <string name="settings_key_color_group_summary">Use the slider below to adjust opacity · %1$d / 255 opacity · %2$d mapped entries</string>

@@ -73,6 +73,10 @@ internal class WeTypeIconDrawable : Drawable() {
 
     private fun buildAccentPaths(source: String): List<AccentPath> {
         if (source.isBlank()) return listOf(DEFAULT_ACCENT)
+        if (source.length > WeTypeSettings.MAX_ICON_SOURCE_CHARS) {
+            Log.e(TAG, "Custom icon source exceeds ${WeTypeSettings.MAX_ICON_SOURCE_CHARS} chars, using the built-in badge")
+            return listOf(DEFAULT_ACCENT)
+        }
         val raw = pathDataEntries(source).mapNotNull { entry ->
             runCatching {
                 PathParser.createPathFromPathData(SvgPathNormalizer.normalize(entry.pathData))?.apply {
@@ -88,6 +92,10 @@ internal class WeTypeIconDrawable : Drawable() {
         if (raw.isEmpty()) {
             // 静默回退会让「导入了却没生效」无从排查，这里留一条错误日志
             Log.e(TAG, "Failed to parse custom icon path, falling back to the built-in badge")
+            return listOf(DEFAULT_ACCENT)
+        }
+        if (raw.size > WeTypeSettings.MAX_ICON_PATH_COUNT) {
+            Log.e(TAG, "Custom icon has ${raw.size} paths (max ${WeTypeSettings.MAX_ICON_PATH_COUNT}), using the built-in badge")
             return listOf(DEFAULT_ACCENT)
         }
 
