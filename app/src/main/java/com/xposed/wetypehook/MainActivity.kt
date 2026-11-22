@@ -2071,13 +2071,20 @@ private fun FontPreferenceItem(
             val extension = if (hint.contains(".otf")) ".otf" else ".ttf"
             val directory = File(context.applicationContext.filesDir, "fonts")
             directory.mkdirs()
-            directory.listFiles()?.forEach { it.delete() }
-            val target = File(directory, "custom$extension")
+            // 先拷到临时文件验证可解码,成功后再替换正式文件——避免打开流失败
+            // 时把已验证的旧字体删掉、偏好里的路径悬空。
+            val staging = File(directory, "staging$extension")
             context.contentResolver.openInputStream(uri)?.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+                staging.outputStream().use { output -> input.copyTo(output) }
             } ?: error("Cannot open the picked font")
             // 可解码性先在设置进程验证，避免把坏字体文件留给键盘侧静默失败。
-            Typeface.createFromFile(target)
+            Typeface.createFromFile(staging)
+            directory.listFiles()?.forEach { if (it.name != staging.name) it.delete() }
+            val target = File(directory, "custom$extension")
+            if (!staging.renameTo(target)) {
+                staging.copyTo(target, overwrite = true)
+                staging.delete()
+            }
             target.absolutePath
         }.getOrNull()
         if (copied == null) {

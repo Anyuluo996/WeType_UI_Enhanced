@@ -297,6 +297,32 @@ internal object WeTypeResourceHooks {
 
     private val mainHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
 
+    /** 可重试资源 id 解析的线程安全缓存体。 */
+    class RetriableIdCache {
+        @Volatile
+        private var resolved: Map<Int, Unit>? = null
+        private val lock = Any()
+
+        /**
+         * 判定 resId 是否属于给定资源名家族。lazyResourceIds 的一次性求值会把插件 dex
+         * 解密前发生的首次回调永久缓存为空映射(hookPopupBackgroundTint 处已记录该失败
+         * 模式)——解析成功前这里持续重试,成功后缓存定值。
+         */
+        fun contains(resId: Int, names: Map<String, Unit>, vararg classNames: String): Boolean {
+            resolved?.let { return resId in it }
+            synchronized(lock) {
+                resolved?.let { return resId in it }
+                val mapped = resolveResourceIds(names, *classNames)
+                if (mapped.isNotEmpty()) {
+                    resolved = mapped.mapValues { Unit }
+                    return resId in (resolved as Map<Int, Unit>)
+                }
+                return false
+            }
+        }
+    }
+
+
     /**
      * For hooks whose TARGET method lives on a plugin class: the class does not exist yet at
      * install time, so the install itself must wait. Retries on the main looper until the class
@@ -786,30 +812,31 @@ internal object WeTypeResourceHooks {
      * 用户未自定义文字色时透传宿主位图。
      */
     fun hookKeyboardSwitchLabelTint() {
-        val labelIds by lazyResourceIds(
-            mapOf(
-                "keyboard_switch_left_zhong_nor" to Unit,
-                "keyboard_switch_left_zhong_sel" to Unit,
-                "keyboard_switch_right_english_nor" to Unit,
-                "keyboard_switch_right_english_sel" to Unit
-            ),
-            WETYPE_DRAWABLE_R_CLASS
+        val switchLabelNames = mapOf(
+            "keyboard_switch_left_zhong_nor" to Unit,
+            "keyboard_switch_left_zhong_sel" to Unit,
+            "keyboard_switch_right_english_nor" to Unit,
+            "keyboard_switch_right_english_sel" to Unit
         )
+        val labelIdCache = RetriableIdCache()
         runCatching {
             // 标签位图的 Bitmap 对象身份登记:getDrawable 命中时记录,渲染终点按此识别。
             // ConstantState 派生的所有 drawable 实例共享同一 Bitmap,身份匹配覆盖全部
             // 派生/缓存实例——单实例染色被缓存绕过的问题由此解决。
-            val labelBitmaps = java.util.Collections.newSetFromMap(
-                java.util.WeakHashMap<android.graphics.Bitmap, Boolean>()
+            val labelBitmaps = java.util.Collections.synchronizedSet(
+                java.util.Collections.newSetFromMap(
+                    java.util.WeakHashMap<android.graphics.Bitmap, Boolean>()
+                )
             )
-            java.util.Collections.synchronizedSet(labelBitmaps)
             listOf(
                 arrayOf(Int::class.javaPrimitiveType),
                 arrayOf(Int::class.javaPrimitiveType, Resources.Theme::class.java)
             ).forEach { signature ->
                 Resources::class.java.getMethod("getDrawable", *signature).hookAfter { param ->
                     val id = param[0] as? Int ?: return@hookAfter
-                    if (id !in labelIds) return@hookAfter
+                    if (!labelIdCache.contains(id, switchLabelNames, WETYPE_DRAWABLE_R_CLASS)) {
+                        return@hookAfter
+                    }
                     val drawable = param.result as? BitmapDrawable ?: return@hookAfter
                     val bitmap = drawable.bitmap ?: return@hookAfter
                     labelBitmaps.add(bitmap)
@@ -942,6 +969,17 @@ internal object WeTypeResourceHooks {
                             param[0] = textColor
                         }
                     }
+                    runCatching {
+                        Canvas::class.java.getMethod(
+                            "drawColor",
+                            Int::class.javaPrimitiveType,
+                            android.graphics.BlendMode::class.java
+                        ).hookBefore { param ->
+                            if (accentColor != 0 && param[0] == accentColor) {
+                                param[0] = textColor
+                            }
+                        }
+                    }
                     Log.i("Success: Hook glyph mask erase/draw color swap")
                 }
             }
@@ -966,9 +1004,11 @@ internal object WeTypeResourceHooks {
             ).hookAfter { param ->
                 val view = param.thisObject as? android.widget.TextView ?: return@hookAfter
                 if (!view.javaClass.name.startsWith("com.tencent.wetype")) return@hookAfter
-                val text = param[0]?.toString() ?: return@hookAfter
-                if (text != "中" && text != "英") return@hookAfter
-                val color = WeTypeSettings.getAppearanceColorXposed(KEY_TEXT_COLOR_GROUP_ID)
+                val text = param[0] as? CharSequence ?: return@hookAfter
+                if (text.length != 1) return@hookAfter
+                if (text[0] != '中' && text[0] != '英') return@hookAfter
+                // 未自定义文字色时透传宿主原色——不得用组默认值强制覆盖标签。
+                val color = resolveKeyTextColorOrNull(view.resources) ?: return@hookAfter
                 view.setTextColor(color)
             }
             Log.i("Success: Hook CN/EN switch label color")
@@ -1294,17 +1334,19 @@ internal object WeTypeResourceHooks {
         // ime_key_white_text_color(由按键文字组覆盖)。因此皮肤取色器 m1$f.h 只有在
         // (a)调用栈来自 floatview 且 (b)解析的资源正是 ime_skin_color_14 时才替换为
         // 弹出色(含独立透明度)——未选中气泡(transparent)与其他 floatview 取色不受影响。
-        val popupAccentColorIds by lazyResourceIds(
-            mapOf("ime_skin_color_14" to Unit),
-            WETYPE_COLOR_R_CLASS
-        )
+        val popupAccentCache = RetriableIdCache()
+        val popupAccentNames = mapOf("ime_skin_color_14" to Unit)
         deferredPluginInstall("wetype.popup-switch-drawer-color", "com.tencent.wetype.plugin.hld.utils.m1\$f") {
             runCatching {
                 val helperClass = loadClassOrNull("com.tencent.wetype.plugin.hld.utils.m1\$f")
                     ?: error("Failed to load m1\$f")
                 helperClass.declaredMethods.filter { it.name == "h" }.forEach { method ->
                     method.hookAfter { param ->
-                        if (param.args.none { it is Int && it in popupAccentColorIds }) {
+                        if (param.args.none {
+                                (it as? Int)?.let { id ->
+                                    popupAccentCache.contains(id, popupAccentNames, WETYPE_COLOR_R_CLASS)
+                                } == true
+                            }) {
                             return@hookAfter
                         }
                         val fromPopup = Throwable().stackTrace.any { stackFrame ->
@@ -1359,7 +1401,8 @@ internal object WeTypeResourceHooks {
                     val color = WeTypeSettings.getAppearanceColorXposed(KEY_POPUP_BG_COLOR_GROUP_ID)
                     val passthrough = group.passThroughByDefault && color == group.defaultColor
                     val selected = param[0] as? Boolean ?: return@hookAfter
-                    applyItemPopupTint(view, if (passthrough) null else color.takeIf { selected })
+                    val effective = if (passthrough) null else popupColorWithAlpha(color)
+                    applyItemPopupTint(view, effective.takeIf { selected })
                 }
                 Log.i("Success: Hook switch drawer popup color")
             }.onFailure {
@@ -1381,19 +1424,39 @@ internal object WeTypeResourceHooks {
      * 条目根视图背景染色;null 清除恢复宿主原背景。
      * 皮肤会把品牌强调色的 alpha(可能被用户设为 0)烘进背景 drawable 的填充色,
      * SRC_ATOP 叠加会保留目标 alpha 导致染色不可见——所以按 drawable 类型直接改
-     * 填充色(Gradient/Shape 保留圆角形状),仅未知类型退回叠加。
+     * 填充色(Gradient/Shape 保留圆角形状),仅未知类型退回叠加。Gradient/Shape 的
+     * 原填充色在首次染色前登记,清除(null)时恢复——条目回收复用后不残留弹出色。
      */
+    private val popupItemOriginalFills = java.util.Collections.synchronizedMap(
+        java.util.WeakHashMap<Drawable, Int>()
+    )
+
     private fun applyItemPopupTint(view: View, color: Int?) {
         val background = view.background ?: return
         runCatching {
             val mutated = background.mutate()
             if (color == null) {
                 mutated.colorFilter = null
+                val original = popupItemOriginalFills.remove(mutated)
+                when {
+                    original != null && mutated is android.graphics.drawable.GradientDrawable ->
+                        mutated.setColor(original)
+                    original != null && mutated is android.graphics.drawable.ShapeDrawable ->
+                        mutated.paint.color = original
+                    original != null && mutated.alpha != 255 -> mutated.setAlpha(255)
+                }
+                view.invalidate()
                 return
             }
             when (mutated) {
-                is android.graphics.drawable.GradientDrawable -> mutated.setColor(color)
-                is android.graphics.drawable.ShapeDrawable -> mutated.paint.color = color
+                is android.graphics.drawable.GradientDrawable -> {
+                    popupItemOriginalFills.putIfAbsent(mutated, mutated.color?.defaultColor ?: color)
+                    mutated.setColor(color)
+                }
+                is android.graphics.drawable.ShapeDrawable -> {
+                    popupItemOriginalFills.putIfAbsent(mutated, mutated.paint.color)
+                    mutated.paint.color = color
+                }
                 else -> {
                     mutated.setAlpha(255)
                     mutated.setColorFilter(color, PorterDuff.Mode.SRC_ATOP)
@@ -1825,8 +1888,10 @@ internal object WeTypeResourceHooks {
         dynamicColorReplacements: Map<Int, WeTypeAppearanceColorGroup>
     ): Int {
         staticColorReplacements[colorResId]?.let { return it }
-        val group = dynamicColorReplacements[colorResId]
-            ?: runtimeColorOverrides[colorResId]
+        // 运行期登记(attr 精确解析产物)优先于按资源名的静态映射——同名家族里
+        // 不同主题槽位可能归属不同颜色组(如高亮候选 vs 品牌强调)。
+        val group = runtimeColorOverrides[colorResId]
+            ?: dynamicColorReplacements[colorResId]
             ?: return color
         return resolvedGroupColor(group, color)
     }
@@ -1838,10 +1903,10 @@ internal object WeTypeResourceHooks {
     ): Boolean {
         val colorResId = typedValue.resourceId.takeIf { it != 0 } ?: return false
         val replacementColor = staticColorReplacements[colorResId]
-            ?: dynamicColorReplacements[colorResId]?.let { group ->
+            ?: runtimeColorOverrides[colorResId]?.let { group ->
                 resolvedGroupColor(group, typedValue.data)
             }
-            ?: runtimeColorOverrides[colorResId]?.let { group ->
+            ?: dynamicColorReplacements[colorResId]?.let { group ->
                 resolvedGroupColor(group, typedValue.data)
             }
             ?: return false

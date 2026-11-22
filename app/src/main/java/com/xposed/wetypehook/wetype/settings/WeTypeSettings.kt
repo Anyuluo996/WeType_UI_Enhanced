@@ -253,11 +253,12 @@ object WeTypeSettings {
                         }
                     }
                 }.also {
-                    it.startWatching()
-                    // 以进程启动时文件里的令牌为基线,只有之后的新令牌才触发重启。
+                    // 以进程启动时文件里的令牌为基线,只有之后的新令牌才触发重启——
+                    // 基线必须在 startWatching 之前读取,否则观察窗口内的保存会被基线覆盖。
                     lastSeenRestartToken = runCatching {
                         preferencesFile.read()[KEY_HOST_RESTART_TOKEN] as? String
                     }.getOrNull()
+                    it.startWatching()
                 }
             }
             // Refresh at input/view entry too, including after a process was frozen.
@@ -281,7 +282,8 @@ object WeTypeSettings {
         val token = runCatching { file.read()[KEY_HOST_RESTART_TOKEN] as? String }.getOrNull() ?: return
         if (token == lastSeenRestartToken) return
         lastSeenRestartToken = token
-        if (token in ignoredRestartTokens) return
+        // 令牌处理完即从忽略集合移除,集合不随保存次数无限增长。
+        if (ignoredRestartTokens.remove(token)) return
         Log.i(TAG, "Restarting keyboard process to reload settings")
         android.os.Process.killProcess(android.os.Process.myPid())
     }
